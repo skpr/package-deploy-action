@@ -1,0 +1,65 @@
+name: Skpr Package and Deploy
+description: Package and Deploy to a Skpr environment
+inputs:
+  env:
+    description: The environment
+    required: true
+  package:
+    description: Whether to package or not. Set to "false" if you are deploying a version that has already been packaged.
+    required: false
+    default: "true"
+  post-deploy:
+    description: The post deploy steps to run on the environment
+    required: false
+outputs:
+  url:
+    description: The Skpr environment URL
+    value: ${{ steps.skpr-info.outputs.url }}
+  version:
+    description: The version being deployed to the Skpr environment (uses git describe).
+    value: ${{ steps.skpr-version.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - id: skpr-setup
+      run: |
+        cli_version=$(curl -sSL "https://api.github.com/repos/skpr/cli/releases/latest" | jq -r .tag_name)
+        curl -sSL https://github.com/skpr/cli/releases/download/${cli_version}/skpr_${cli_version:1}_linux_amd64.deb -o skpr-cli.deb
+        sudo dpkg -i skpr-cli.deb
+      shell: bash
+    - id: skpr-info
+      run: |
+        domain=$(skpr info ${{ inputs.env }} | jq -r ".Ingress.Domain")
+        url=https://$domain
+        echo "URL: $url"
+        echo "::set-output name=url::$url"
+      shell: bash
+    - id: skpr-version
+      run: |
+        version=$(git describe --tags --always)
+        echo "Version: $version"
+        echo "::set-output name=version::$version"
+      shell: bash
+    - id: skpr-package
+      run: |
+        if [ "${{ inputs.package }}" = "true" ]; then
+          echo "Packaging version ${{ steps.skpr-version.outputs.version }}"
+          skpr package ${{ steps.skpr-version.outputs.version }}
+        else
+          echo "Skipping packaging"
+        fi
+      shell: bash
+    - id: skpr-deploy
+      run: |
+        echo "Deploying version ${{ steps.skpr-version.outputs.version }} to ${{ inputs.env }}"
+        skpr deploy ${{ inputs.env }} ${{ steps.skpr-version.outputs.version }}
+      shell: bash
+    - id: skpr-post-deploy
+      run: |
+        if [ -n "${{ inputs.post-deploy }}" ]; then
+          echo "Running post-deploy command: ${{ inputs.post-deploy }}"
+          skpr exec ${{ inputs.env }} -- ${{ inputs.post-deploy }}
+        else
+          echo "No post-deploy command specified"
+        fi
+      shell: bash
